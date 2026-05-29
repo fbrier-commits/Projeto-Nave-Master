@@ -50,6 +50,18 @@
   .stat { background: hsl(var(--muted)); border: 1px solid hsl(var(--palette-border) / 0.6); border-radius: 999px; padding: 6px 14px; font-size: 12px; color: var(--text-secondary); }
   .stat b { font-size: 14px; color: var(--text-primary); margin-left: 2px; }
   .stat.alta b { color: var(--red); } .stat.media b { color: var(--yellow); } .stat.baixa b { color: var(--green); }
+  .pend-wrap { position: relative; }
+  .stat.clicavel { cursor: pointer; user-select: none; transition: border-color .15s, background .15s; }
+  .stat.clicavel:hover { border-color: hsl(var(--primary) / 0.6); background: hsl(84 60% 92% / 0.5); }
+  .stat.clicavel .material-symbols-rounded { font-size: 15px; vertical-align: -3px; margin-left: 1px; color: var(--text-muted); }
+  .pend-pop { position: absolute; top: calc(100% + 8px); left: 0; z-index: 30; min-width: 240px; max-height: 320px; overflow-y: auto; background: hsl(var(--card)); border: 1px solid hsl(var(--palette-border)); border-radius: var(--radius-sm); box-shadow: var(--shadow-md); padding: 6px; display: none; }
+  .pend-pop.show { display: block; }
+  .pend-pop .pp-titulo { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-muted); font-weight: 600; padding: 6px 8px 4px; }
+  .pend-pop .pp-item { display: flex; align-items: center; gap: 8px; padding: 7px 8px; border-radius: var(--radius-xs); cursor: pointer; font-size: 13px; color: var(--text-primary); }
+  .pend-pop .pp-item:hover { background: hsl(var(--muted)); }
+  .pend-pop .pp-dot { width: 8px; height: 8px; border-radius: 999px; flex-shrink: 0; }
+  .pend-pop .pp-dot.alta { background: var(--red); } .pend-pop .pp-dot.media { background: var(--yellow); } .pend-pop .pp-dot.baixa { background: var(--green); }
+  .pend-pop .pp-vazio { padding: 10px 8px; color: var(--text-muted); font-size: 13px; }
   .filtros { margin-left: auto; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
   .chip { background: hsl(var(--card)); border: 1px solid hsl(var(--palette-border)); color: var(--text-secondary); border-radius: 999px; padding: 7px 16px; font-size: 13px; font-weight: 500; cursor: pointer; transition: all .15s; }
   .chip:hover { border-color: hsl(var(--primary) / 0.5); color: var(--text-primary); }
@@ -114,7 +126,10 @@
     </button>
   </div>
   <div class="toolbar">
-    <div class="stat">Pendentes <b id="st-pend">0</b></div>
+    <div class="pend-wrap">
+      <div class="stat clicavel" id="stat-pend" onclick="togglePendentes(event)" title="Ver quem está pendente">Pendentes <b id="st-pend">0</b><span class="material-symbols-rounded">expand_more</span></div>
+      <div class="pend-pop" id="pend-pop"></div>
+    </div>
     <div class="stat alta">Alta <b id="st-alta">0</b></div>
     <div class="stat media">Média <b id="st-media">0</b></div>
     <div class="stat baixa">Baixa <b id="st-baixa">0</b></div>
@@ -124,6 +139,7 @@
       <span class="chip" data-f="ALTA">Alta</span>
       <span class="chip" data-f="MEDIA">Média</span>
       <span class="chip" data-f="BAIXA">Baixa</span>
+      <span class="chip" data-f="RESPONDIDAS">Respondidas</span>
     </div>
   </div>
   <div class="mock-aviso">
@@ -261,16 +277,19 @@ function montarCard(s) {
       <span class="intencao">${escapar(s.intencao)}</span>
       <div class="bloco"><div class="rotulo">Mensagem do mentorado</div><div class="msg-mentorado">${escapar(s.mensagens)}</div></div>
       ${blocoSugestao}
-      <div class="bloco"><div class="rotulo">Por que</div><div class="justificativa">${escapar(s.justificativa)}</div></div>
       ${lembreteHtml}
       ${blocoAcoes}
     </div>`;
 }
 
 function passaFiltros(s) {
-  const passaFiltro = filtroAtual === "todas" || s.urgencia === filtroAtual;
   const passaBusca = !buscaAtual || (s.contact_name || "").toLowerCase().includes(buscaAtual);
-  return passaFiltro && passaBusca;
+  if (!passaBusca) return false;
+  // Aba "Respondidas": só mostra o que já foi enviado
+  if (filtroAtual === "RESPONDIDAS") return s.status === "enviada";
+  // Demais abas (Todas / Alta / Média / Baixa): só pendentes
+  if (s.status === "enviada") return false;
+  return filtroAtual === "todas" || s.urgencia === filtroAtual;
 }
 
 function render() {
@@ -278,19 +297,19 @@ function render() {
   const visiveis = SUGESTOES.filter(passaFiltros);
   const ordemUrg = { ALTA: 0, MEDIA: 1, BAIXA: 2 };
 
-  const pendentes = visiveis.filter(s => s.status !== "enviada").sort((a, b) => (ordemUrg[a.urgencia] ?? 3) - (ordemUrg[b.urgencia] ?? 3));
-  const enviadas = visiveis.filter(s => s.status === "enviada" && dentroDe7Dias(s.enviada_em)).sort((a, b) => new Date(b.enviada_em) - new Date(a.enviada_em));
-
-  let html = pendentes.length ? pendentes.map(montarCard).join("") : `<div class="vazio">Nenhuma sugestão pendente.</div>`;
-  if (enviadas.length) {
-    html += `
-      <div class="divisor">
-        <span class="rot"><span class="material-symbols-rounded">mark_chat_read</span>Mensagens enviadas</span>
-        <span class="nota">últimos 7 dias · ${enviadas.length}</span>
-        <span class="linha"></span>
-      </div>`;
-    html += enviadas.map(montarCard).join("");
+  let html;
+  if (filtroAtual === "RESPONDIDAS") {
+    const respondidas = visiveis.sort((a, b) => new Date(b.enviada_em) - new Date(a.enviada_em));
+    html = respondidas.length
+      ? respondidas.map(montarCard).join("")
+      : `<div class="vazio">Nenhuma mensagem respondida ainda.</div>`;
+  } else {
+    const pendentes = visiveis.sort((a, b) => (ordemUrg[a.urgencia] ?? 3) - (ordemUrg[b.urgencia] ?? 3));
+    html = pendentes.length
+      ? pendentes.map(montarCard).join("")
+      : `<div class="vazio">Nenhuma sugestão pendente.</div>`;
   }
+
   lista.innerHTML = html;
   if (editandoId) { const t = document.getElementById("edit-" + editandoId); if (t) { t.focus(); t.setSelectionRange(t.value.length, t.value.length); } }
   atualizarStats();
@@ -353,6 +372,39 @@ function alternarEnviada(id) {
   render();
 }
 
+// Lista de mentorados pendentes (contador "Pendentes" clicável)
+function togglePendentes(e) {
+  if (e) e.stopPropagation();
+  const pop = document.getElementById("pend-pop");
+  if (pop.classList.contains("show")) { pop.classList.remove("show"); return; }
+  const ordemUrg = { ALTA: 0, MEDIA: 1, BAIXA: 2 };
+  const pendentes = SUGESTOES.filter(s => s.status !== "enviada")
+    .sort((a, b) => (ordemUrg[a.urgencia] ?? 3) - (ordemUrg[b.urgencia] ?? 3));
+  let html = `<div class="pp-titulo">Mentorados pendentes (${pendentes.length})</div>`;
+  html += pendentes.length
+    ? pendentes.map(s => `<div class="pp-item" onclick="irParaCard('${s.id}')"><span class="pp-dot ${classeUrg(s.urgencia)}"></span>${escapar(s.contact_name)}</div>`).join("")
+    : `<div class="pp-vazio">Nenhum pendente.</div>`;
+  pop.innerHTML = html;
+  pop.classList.add("show");
+}
+
+function irParaCard(id) {
+  document.getElementById("pend-pop").classList.remove("show");
+  setTab("todas");
+  const card = document.querySelector(`.card[data-id="${id}"]`);
+  if (card) {
+    card.scrollIntoView({ behavior: "smooth", block: "center" });
+    card.style.boxShadow = "0 0 0 3px hsl(84 78% 55% / 0.55)";
+    setTimeout(() => { card.style.boxShadow = ""; }, 1500);
+  }
+}
+
+function setTab(f) {
+  filtroAtual = f;
+  document.querySelectorAll(".chip").forEach(c => c.classList.toggle("ativo", c.dataset.f === f));
+  render();
+}
+
 function exportarAprendizado() {
   const correcoes = lerCorrecoes();
   if (!correcoes.length) { mostrarToast("Nenhuma edição aprendida ainda"); return; }
@@ -382,6 +434,15 @@ document.querySelectorAll(".chip").forEach(chip => {
   });
 });
 document.getElementById("busca").addEventListener("input", e => { buscaAtual = e.target.value.toLowerCase(); render(); });
+
+// Fecha o popover de pendentes ao clicar fora dele
+document.addEventListener("click", e => {
+  const pop = document.getElementById("pend-pop");
+  const stat = document.getElementById("stat-pend");
+  if (pop && pop.classList.contains("show") && !pop.contains(e.target) && !stat.contains(e.target)) {
+    pop.classList.remove("show");
+  }
+});
 
 (async function start() {
   SUGESTOES = await carregarSugestoes();
